@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/videos/
+outputs/
+*.pt
+.pytest_cache/
