@@ -12,7 +12,8 @@ def draw_detections(frame: np.ndarray, detections: list[Detection]) -> np.ndarra
     for det in detections:
         x1, y1, x2, y2 = (int(v) for v in det.bbox)
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"{det.class_name} {det.confidence:.2f}"
+        prefix = f"#{det.track_id} " if det.track_id is not None else ""
+        label = f"{prefix}{det.class_name} {det.confidence:.2f}"
         cv2.putText(out, label, (x1, max(y1 - 6, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
     return out

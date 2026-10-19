@@ -36,3 +36,7 @@ def test_draw_does_not_mutate_input():
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     out = draw_detections(frame, [Detection("car", 0.9, (10, 10, 50, 50))])
     assert frame.sum() == 0 and out.sum() > 0
+def test_detection_track_id_defaults_to_none():
+    det = Detection("car", 0.9, (10, 10, 50, 50))
+    assert det.track_id is None
+    assert Detection("car", 0.9, (10, 10, 50, 50), track_id=7).track_id == 7

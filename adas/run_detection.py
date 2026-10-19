@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-frames", type=int, default=None)
     p.add_argument("--save", type=Path, default=None, help="output .mp4 path")
     p.add_argument("--no-display", action="store_true")
+    p.add_argument("--track", action="store_true", help="enable object tracking")
     return p.parse_args()
 
 
@@ -29,7 +30,7 @@ def main() -> None:
     print(f"Video: {info.width}x{info.height} @ {info.fps:.1f} fps, "
           f"{info.frame_count} frames")
 
-    detector = YoloDetector(args.model, args.conf, args.device)
+    detector = YoloDetector(args.model, args.conf, args.device, track=args.track)
 
     writer = None
     if args.save:
