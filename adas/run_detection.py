@@ -6,8 +6,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from adas.perception.annotate import draw_detections, draw_overlay
+from adas.perception.annotate import draw_detections, draw_lanes, draw_overlay
 from adas.perception.detector import YoloDetector
+from adas.perception.lanes import LaneDetector
 from adas.perception.video import get_video_info, read_frames
 
 
@@ -21,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--save", type=Path, default=None, help="output .mp4 path")
     p.add_argument("--no-display", action="store_true")
     p.add_argument("--track", action="store_true", help="enable object tracking")
+    p.add_argument("--lanes", action="store_true", help="enable lane detection")
     return p.parse_args()
 
 
@@ -31,6 +33,7 @@ def main() -> None:
           f"{info.frame_count} frames")
 
     detector = YoloDetector(args.model, args.conf, args.device, track=args.track)
+    lane_detector = LaneDetector() if args.lanes else None
 
     writer = None
     if args.save:
@@ -39,13 +42,20 @@ def main() -> None:
                                  info.fps, (info.width, info.height))
 
     times_ms: list[float] = []
+    lanes_found = 0
+    frames_seen = 0
     try:
         for idx, frame in read_frames(args.video, args.max_frames):
+            frames_seen += 1
             detections, ms = detector.detect(frame)
             if idx > 0:  # frame 0 includes model warm-up, so exclude it
                 times_ms.append(ms)
 
             annotated = draw_detections(frame, detections)
+            if lane_detector is not None:
+                lanes = lane_detector.detect(frame)
+                lanes_found += int(lanes.available)
+                draw_lanes(annotated, lanes)
             draw_overlay(annotated, f"{ms:.0f} ms | {1000 / ms:.1f} FPS | "
                                     f"{len(detections)} objects")
             if writer:
@@ -65,6 +75,9 @@ def main() -> None:
         print(f"Inference: mean {t.mean():.1f} ms | median {np.median(t):.1f} ms | "
               f"p95 {np.percentile(t, 95):.1f} ms")
         print(f"Throughput: {1000 / t.mean():.1f} FPS (model only)")
+    if lane_detector is not None and frames_seen:
+        print(f"Lanes found (both sides): {lanes_found}/{frames_seen} frames "
+              f"({100 * lanes_found / frames_seen:.0f}%)")
 
 
 if __name__ == "__main__":
