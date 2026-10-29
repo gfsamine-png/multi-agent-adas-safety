@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 from ultralytics import YOLO
 
+from adas.perception.stitch import TrackStitcher
+
 # COCO classes relevant for road scenes
 RELEVANT_CLASSES = frozenset(
     {"person", "bicycle", "car", "motorcycle", "bus", "truck",
@@ -30,6 +32,9 @@ class YoloDetector:
         classes: frozenset[str] = RELEVANT_CLASSES,
         track: bool = False,
         tracker: str = "bytetrack.yaml",
+        iou: float = 0.5,             # NMS overlap limit (Ultralytics default: 0.7)
+        agnostic_nms: bool = True,    # suppress overlapping boxes across classes
+        stitch: bool = True,          # stabilise track IDs (only used when track=True)
     ) -> None:
         self.model = YOLO(model_name)  # downloads weights on first use
         self.conf = conf
@@ -37,18 +42,24 @@ class YoloDetector:
         self.classes = classes
         self.track = track
         self.tracker = tracker
+        self.iou = iou
+        self.agnostic_nms = agnostic_nms
+        self.stitcher = TrackStitcher() if (track and stitch) else None
 
     def detect(self, frame: np.ndarray) -> tuple[list[Detection], float]:
         """Return (detections, inference_time_ms) for one BGR frame."""
         start = time.perf_counter()
         if self.track:
             result = self.model.track(
-                frame, conf=self.conf, device=self.device,
+                frame, conf=self.conf, iou=self.iou,
+                agnostic_nms=self.agnostic_nms, device=self.device,
                 persist=True, tracker=self.tracker, verbose=False,
             )[0]
         else:
             result = self.model.predict(
-                frame, conf=self.conf, device=self.device, verbose=False
+                frame, conf=self.conf, iou=self.iou,
+                agnostic_nms=self.agnostic_nms, device=self.device,
+                verbose=False,
             )[0]
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
@@ -62,4 +73,6 @@ class YoloDetector:
             detections.append(
                 Detection(name, float(box.conf[0]), (x1, y1, x2, y2), track_id)
             )
+        if self.stitcher is not None:
+            detections = self.stitcher.update(detections)
         return detections, elapsed_ms
