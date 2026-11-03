@@ -8,10 +8,30 @@ import cv2
 import numpy as np
 
 from adas.perception.annotate import draw_detections, draw_lanes, draw_overlay
-from adas.perception.detector import YoloDetector
+from adas.perception.detector import DEFAULT_EGO_ZONE, YoloDetector
 from adas.perception.lanes import LaneDetector
 from adas.perception.models import FrameObservation
 from adas.perception.video import get_video_info, read_frames
+
+# option name -> LaneDetector argument (None = keep the detector's default)
+ROI_OPTIONS = {
+    "roi_top": "--roi-top",
+    "roi_bottom": "--roi-bottom",
+    "roi_top_left": "--roi-top-left",
+    "roi_top_right": "--roi-top-right",
+    "roi_bottom_left": "--roi-bottom-left",
+    "roi_bottom_right": "--roi-bottom-right",
+    "split_x": "--split-x",
+}
+
+
+def limit_width(frame: np.ndarray, max_width: int) -> np.ndarray:
+    """Shrink a frame wider than max_width (keeps the aspect ratio)."""
+    h, w = frame.shape[:2]
+    if w <= max_width:
+        return frame
+    new_h = round(h * max_width / w)
+    return cv2.resize(frame, (max_width, new_h), interpolation=cv2.INTER_AREA)
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,25 +47,55 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lanes", action="store_true", help="lane detection")
     p.add_argument("--json-out", type=Path, default=None,
                    help="write one JSON line per frame (.jsonl)")
+    p.add_argument("--max-width", type=int, default=1920,
+                   help="shrink wider frames to this width (lane settings "
+                        "were tuned at 1920 pixels)")
+    # per-camera lane search area (fractions of the frame, see tools/show_roi.py)
+    for dest, flag in ROI_OPTIONS.items():
+        p.add_argument(flag, dest=dest, type=float, default=None)
+    # area showing our own car (mirror, hood): detections there are ignored
+    p.add_argument("--ego-zone", type=float, nargs=2, default=None,
+                   metavar=("X_MAX", "Y_MIN"),
+                   help="ignore boxes centered left of X_MAX*width and "
+                        "below Y_MIN*height")
+    p.add_argument("--no-ego-zone", action="store_true",
+                   help="turn the exclusion zone off")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     info = get_video_info(args.video)
-    size = f"{info.width}x{info.height}"
-    print(f"Video: {size} @ {info.fps:.1f} fps, {info.frame_count} frames")
+    print(f"Video: {info.width}x{info.height} @ {info.fps:.1f} fps, "
+          f"{info.frame_count} frames")
+    out_w = min(info.width, args.max_width)
+    out_h = round(info.height * out_w / info.width)
+    print(f"Processing size: {out_w}x{out_h}")
+
+    if args.no_ego_zone:
+        ego_zone = None
+    elif args.ego_zone:
+        ego_zone = tuple(args.ego_zone)
+    else:
+        ego_zone = DEFAULT_EGO_ZONE
 
     detector = YoloDetector(args.model, args.conf, args.device,
-                            track=args.track)
-    lane_detector = LaneDetector() if args.lanes else None
+                            track=args.track, ego_zone=ego_zone)
+
+    lane_detector = None
+    if args.lanes:
+        lane_kwargs = {k: getattr(args, k) for k in ROI_OPTIONS
+                       if getattr(args, k) is not None}
+        if lane_kwargs:
+            print(f"Lane settings: {lane_kwargs}")
+        lane_detector = LaneDetector(**lane_kwargs)
 
     writer = None
     if args.save:
         args.save.parent.mkdir(parents=True, exist_ok=True)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(str(args.save), fourcc, info.fps,
-                                 (info.width, info.height))
+                                 (out_w, out_h))
 
     json_file = None
     if args.json_out:
@@ -58,6 +108,7 @@ def main() -> None:
     in_lane_objects = 0
     try:
         for idx, frame in read_frames(args.video, args.max_frames):
+            frame = limit_width(frame, args.max_width)
             frames_seen += 1
             detections, ms = detector.detect(frame)
             if idx > 0:  # frame 0 includes model warm-up
@@ -77,7 +128,9 @@ def main() -> None:
             in_lane = sum(p == "in_lane" for p in obs.positions())
             in_lane_objects += in_lane
             if json_file:
-                json_file.write(json.dumps(obs.to_dict()) + "\n")
+                row = obs.to_dict()
+                row["frame"] = {"width": out_w, "height": out_h}
+                json_file.write(json.dumps(row) + "\n")
 
             annotated = draw_detections(frame, detections)
             if lanes is not None:

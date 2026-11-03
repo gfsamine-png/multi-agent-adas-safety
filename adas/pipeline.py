@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator
 
 from adas.ecu.can_messages import FCW_ID, LDW_ID, CanFrame, encode_fcw, encode_ldw
+from adas.safety.corridor import effective_lane_position
 from adas.safety.ldw import LaneDepartureWarner
 from adas.safety.risk import assess_risk
 from adas.safety.ttc import TTCTracker
@@ -46,6 +47,7 @@ def iter_alert_events(
                 continue
             obs = json.loads(line)
             t = obs["timestamp_s"]
+            frame_width = (obs.get("frame") or {}).get("width")  # old files: None
 
             risks = {}
             for obj in obs["objects"]:
@@ -53,7 +55,10 @@ def iter_alert_events(
                 if tid is None:
                     continue
                 tracker.update(tid, t, tuple(obj["bbox"]))
-                risks[tid] = assess_risk(obj["lane_position"], tracker.estimate(tid))
+                lane_pos = effective_lane_position(
+                    obj["lane_position"], obj["bbox"], frame_width
+                )
+                risks[tid] = assess_risk(lane_pos, tracker.estimate(tid))
             tracker.prune(t)
 
             for a in fcw.update(t, risks):
